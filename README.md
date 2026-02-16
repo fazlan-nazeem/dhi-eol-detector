@@ -1,6 +1,6 @@
 # DHI EOL Detector
 
-A CLI tool that inspects a Docker image, extracts its base image, verifies whether it is a **Docker Hardened Image (DHI)**, and retrieves its **End of Life / End of Support** dates from the Docker Scout GraphQL API.
+A CLI tool that inspects a Docker image, extracts its base image, verifies whether it is a **Docker Hardened Image (DHI)**, and retrieves its **End of Life** date from the Docker Scout GraphQL API.
 
 ## Prerequisites
 
@@ -38,7 +38,7 @@ docker run --rm \
   -e DOCKER_USERNAME="$DOCKER_USERNAME" \
   -e DOCKER_PAT="$DOCKER_PAT" \
   dhi-eol-detector myapp:latest
-```
+demonstrationorg/task-api```
 
 ### Sample Output
 
