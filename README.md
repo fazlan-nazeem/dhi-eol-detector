@@ -27,7 +27,7 @@ docker run --rm \
   dhi-eol-detector <image-name>
 ```
 
-> **Note:** The Docker socket mount (`-v /var/run/docker.sock:...`) is required so the tool can run `docker inspect` on images available on your host.
+> **Note:** The Docker socket mount (`-v /var/run/docker.sock:...`) is required so the tool can run `docker inspect` on images available on your host and `docker pull` if the image needs to be pulled.
 
 ### Examples
 
@@ -39,6 +39,10 @@ docker run --rm \
   -e DOCKER_PAT="$DOCKER_PAT" \
   dhi-eol-detector myapp:latest
 ```
+
+### Sample Output
+
+![Sample output of DHI EOL Detector](assets/sample-output.png)
 
 ## How It Works
 
