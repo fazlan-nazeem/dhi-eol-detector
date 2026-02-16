@@ -37,9 +37,8 @@ docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e DOCKER_USERNAME="$DOCKER_USERNAME" \
   -e DOCKER_PAT="$DOCKER_PAT" \
-  dhi-eol-detector myapp:latest
-demonstrationorg/task-api```
-
+  dhi-eol-detector demonstrationorg/task-api
+```
 ### Sample Output
 
 ![Sample output of DHI EOL Detector](assets/sample-output.png)
