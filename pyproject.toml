@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dhi-eol-detector"
+version = "1.0.0"
+description = "Detects Docker Hardened Images and retrieves their End of Life dates"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+    "requests>=2.28.0",
+]
+
+[project.scripts]
+dhi-eol-detector = "dhi_eol_detector:main"
