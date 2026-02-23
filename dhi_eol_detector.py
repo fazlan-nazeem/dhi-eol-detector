@@ -2,25 +2,16 @@
 """
 DHI EOL Detector
 
-Extracts the base image from a Docker image, verifies whether it is a
-Docker Hardened Image (DHI), and if so, retrieves its End of Life /
-End of Support dates from the Docker Scout GraphQL API.
+Inspects a Docker image, verifies whether it is a Docker Hardened Image
+(DHI), and if so, reads its End of Life / End of Support date from the
+image labels.
 """
 
 import argparse
 from datetime import date, datetime
 import json
-import os
-import re
 import subprocess
 import sys
-
-import requests
-
-# ─── Constants ────────────────────────────────────────────────────────────────
-
-DOCKER_AUTH_URL = "https://hub.docker.com/v2/auth/token"
-GRAPHQL_URL = "https://api.scout.docker.com/v1/graphql"
 
 # ANSI colour helpers
 _BOLD = "\033[1m"
@@ -50,48 +41,6 @@ def _info(msg: str) -> str:
 
 def _header(msg: str) -> str:
     return f"\n{_BOLD}{msg}{_RESET}"
-
-
-# ─── Image reference parsing ─────────────────────────────────────────────────
-
-def parse_image_reference(image_ref: str) -> tuple[str, str | None]:
-    """
-    Parse a Docker image reference into (repository, tag).
-
-    Handles formats like:
-      - nginx
-      - nginx:1.25
-      - library/nginx:1.25
-      - docker.io/library/nginx:1.25
-      - docker/nginx-unprivileged:latest
-      - myregistry.com/org/image:tag
-
-    Returns (repository, tag) where tag may be None.
-    """
-    ref = image_ref.strip()
-
-    # Strip known registry prefixes to normalise
-    for prefix in ("docker.io/library/", "docker.io/", "index.docker.io/library/", "index.docker.io/"):
-        if ref.startswith(prefix):
-            ref = ref[len(prefix):]
-            break
-
-    # Handle digest references  (repo@sha256:...)
-    if "@" in ref:
-        ref = ref.split("@")[0]
-
-    # Split tag
-    tag = None
-    if ":" in ref:
-        parts = ref.rsplit(":", 1)
-        ref = parts[0]
-        tag = parts[1]
-
-    # Strip leading "library/" (official images)
-    if ref.startswith("library/"):
-        ref = ref[len("library/"):]
-
-    return ref, tag
 
 
 # ─── Docker inspection ───────────────────────────────────────────────────────
@@ -151,128 +100,22 @@ def extract_dhi_info(labels: dict) -> tuple[str | None, str | None]:
     return repo, dhi_version
 
 
-def extract_base_image(labels: dict) -> tuple[str | None, str | None]:
-    """
-    Extract the base image reference from OCI labels.
-
-    Returns (base_image_ref, base_digest) or (None, None).
-    """
-    base_name = labels.get("org.opencontainers.image.base.name")
-    base_digest = labels.get("org.opencontainers.image.base.digest")
-    return base_name, base_digest
-
-
-# ─── Docker Scout GraphQL API ────────────────────────────────────────────────
-
-def get_jwt_token() -> str:
-    """Exchange Docker PAT for JWT token."""
-    username = os.getenv("DOCKER_USERNAME")
-    pat = os.getenv("DOCKER_PAT")
-
-    if not username or not pat:
-        print(_fail("DOCKER_USERNAME and DOCKER_PAT environment variables must be set."))
-        sys.exit(1)
-
-    payload = {"identifier": username, "secret": pat}
-
-    try:
-        resp = requests.post(DOCKER_AUTH_URL, json=payload, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        token = data.get("token") or data.get("access_token")
-        if not token:
-            print(_fail("Authentication succeeded but no token was returned."))
-            sys.exit(1)
-        return token
-    except requests.exceptions.RequestException as e:
-        print(_fail(f"Authentication failed: {e}"))
-        sys.exit(1)
-
-
-def _graphql(token: str, query: str, variables: dict | None = None) -> dict:
-    """Execute a GraphQL query against the Docker Scout API."""
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "User-Agent": "dhi-eol-detector/1.0",
-    }
-    payload: dict = {"query": query}
-    if variables:
-        payload["variables"] = variables
-
-    resp = requests.post(GRAPHQL_URL, json=payload, headers=headers, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def fetch_dhi_catalog(token: str) -> set[str]:
-    """Fetch the full DHI catalog and return a set of repository names."""
-    query = """
-    query dhiListRepositories {
-      dhiListRepositories {
-        items {
-          name
-          type
-        }
-      }
-    }
-    """
-    data = _graphql(token, query)
-    items = data.get("data", {}).get("dhiListRepositories", {}).get("items", [])
-    return {item["name"] for item in items if item.get("name")}
-
-
-def fetch_eol_info(token: str, repo_name: str) -> list[dict]:
-    """Fetch tag definitions (including EOL) for a DHI repository."""
-    query = """
-    query($repo: String!) {
-      dhiRepository(repoName: $repo) {
-        ... on DhiImageRepositoryDetails {
-          tagDefinitions {
-            displayName
-            tagNames
-            endOfLife
-          }
-        }
-      }
-    }
-    """
-    data = _graphql(token, query, variables={"repo": repo_name})
-    repo_data = data.get("data", {}).get("dhiRepository", {})
-    return repo_data.get("tagDefinitions", [])
-
-
-# ─── Matching logic ──────────────────────────────────────────────────────────
-
-def find_matching_tag_definition(tag: str | None, tag_definitions: list[dict]) -> dict | None:
-    """
-    Find the tag definition that matches the given tag.
-
-    Tag definitions contain a list of tagNames (e.g. ["2", "2.39", "2.39.0"]).
-    We look for an exact match first, then a prefix match.
-    """
-    if not tag:
-        # If no tag was specified, return the first definition (typically "latest")
-        for td in tag_definitions:
-            if "latest" in (td.get("tagNames") or []):
-                return td
-        return tag_definitions[0] if tag_definitions else None
-
-    # Exact match
-    for td in tag_definitions:
-        if tag in (td.get("tagNames") or []):
-            return td
-
-    # Prefix match (e.g. tag "2" could match definition with tagName "2.39")
-    for td in tag_definitions:
-        for tn in (td.get("tagNames") or []):
-            if tn.startswith(tag) or tag.startswith(tn):
-                return td
-
-    return None
-
-
 # ─── Main flow ────────────────────────────────────────────────────────────────
+
+def _format_delta(delta_days: int) -> str:
+    """Return a human-friendly breakdown of a number of days."""
+    abs_days = abs(delta_days)
+    years, rem = divmod(abs_days, 365)
+    months, days = divmod(rem, 30)
+    parts = []
+    if years:
+        parts.append(f"{years} year{'s' if years != 1 else ''}")
+    if months:
+        parts.append(f"{months} month{'s' if months != 1 else ''}")
+    if days:
+        parts.append(f"{days} day{'s' if days != 1 else ''}")
+    return ", ".join(parts) if parts else "0 days"
+
 
 def run(image: str) -> None:
     """Main detection flow."""
@@ -305,67 +148,24 @@ def run(image: str) -> None:
     if dhi_version:
         print(_info(f"DHI Version: {_BOLD}{dhi_version}{_RESET}"))
 
-    # ── Step 2: Authenticate ────────────────────────────────────────────────
-    print(_header("Step 2: Authenticating with Docker Hub"))
-    token = get_jwt_token()
-    print(_ok("Authentication successful."))
+    # ── Step 2: Check EOL from labels ───────────────────────────────────────
+    print(_header("Step 2: Checking End of Life status"))
+    eol = labels.get("com.docker.dhi.date.end-of-life")
 
-    # ── Step 3: Fetch EOL information ───────────────────────────────────────
-    print(_header("Step 3: Fetching End of Life information"))
-    tag_definitions = fetch_eol_info(token, dhi_repo)
-
-    if not tag_definitions:
-        print(_warn("No tag definitions found for this repository."))
-        print()
-        return
-
-    # Use the DHI version label as the tag to match against
-    tag_to_match = dhi_version
-    matched_def = find_matching_tag_definition(tag_to_match, tag_definitions)
-
-    if matched_def:
-        display_name = matched_def.get("displayName", "N/A")
-        eol = matched_def.get("endOfLife")
-        tag_names = ", ".join(matched_def.get("tagNames", []))
-
-        print(_ok(f"Matched tag definition: {_BOLD}{display_name}{_RESET}"))
-        print(_info(f"Tags: {tag_names}"))
-
-        if eol:
-            print(f"  {_BOLD}End of Life:{_RESET} {_YELLOW}{eol}{_RESET}")
-            try:
-                eol_date = datetime.strptime(eol[:10], "%Y-%m-%d").date()
-                today = date.today()
-                delta = eol_date - today
-                if delta.days < 0:
-                    abs_days = abs(delta.days)
-                    years, rem = divmod(abs_days, 365)
-                    months, days = divmod(rem, 30)
-                    parts = []
-                    if years: parts.append(f"{years} year{'s' if years != 1 else ''}")
-                    if months: parts.append(f"{months} month{'s' if months != 1 else ''}")
-                    if days: parts.append(f"{days} day{'s' if days != 1 else ''}")
-                    print(f"  {_RED}{_BOLD}⚠ PAST EOL by {', '.join(parts)}{_RESET}")
-                else:
-                    years, rem = divmod(delta.days, 365)
-                    months, days = divmod(rem, 30)
-                    parts = []
-                    if years: parts.append(f"{years} year{'s' if years != 1 else ''}")
-                    if months: parts.append(f"{months} month{'s' if months != 1 else ''}")
-                    if days: parts.append(f"{days} day{'s' if days != 1 else ''}")
-                    print(f"  {_GREEN}{', '.join(parts)} remaining{_RESET}")
-            except (ValueError, TypeError):
-                pass
-        else:
-            print(f"  {_BOLD}End of Life:{_RESET} {_GREEN}Not set (no planned EOL){_RESET}")
+    if eol:
+        print(_info(f"com.docker.dhi.date.end-of-life: {_BOLD}{eol}{_RESET}"))
+        try:
+            eol_date = datetime.strptime(eol[:10], "%Y-%m-%d").date()
+            today = date.today()
+            delta = eol_date - today
+            if delta.days < 0:
+                print(f"  {_RED}{_BOLD}⚠ PAST EOL by {_format_delta(delta.days)}{_RESET}")
+            else:
+                print(f"  {_GREEN}{_format_delta(delta.days)} remaining{_RESET}")
+        except (ValueError, TypeError):
+            print(_warn("Could not parse the end-of-life date."))
     else:
-        print(_warn(f"No matching tag definition found for version '{tag_to_match}'."))
-        print(_info("Available tag definitions:"))
-        for td in tag_definitions:
-            dn = td.get("displayName", "?")
-            tags = ", ".join(td.get("tagNames", [])[:5])
-            eol = td.get("endOfLife", "—")
-            print(f"    • {_BOLD}{dn}{_RESET}  (tags: {tags})  EOL: {eol}")
+        print(f"  {_BOLD}End of Life:{_RESET} {_GREEN}Not set (no planned EOL){_RESET}")
 
     print()
 

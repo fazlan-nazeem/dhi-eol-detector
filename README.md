@@ -1,13 +1,10 @@
 # DHI EOL Detector
 
-A CLI tool that inspects a Docker image, extracts its base image, verifies whether it is a **Docker Hardened Image (DHI)**, and retrieves its **End of Life** date from the Docker Scout GraphQL API.
+A CLI tool that inspects a Docker image, verifies whether it is a **Docker Hardened Image (DHI)**, and reads its **End of Life** date directly from the image labels.
 
 ## Prerequisites
 
 - **Docker** running locally
-- **Docker Hub credentials** with access to Docker Scout:
-  - `DOCKER_USERNAME` — your Docker Hub username
-  - `DOCKER_PAT` — a Personal Access Token
 
 ## Quick Start
 
@@ -22,8 +19,6 @@ docker build -t dhi-eol-detector .
 ```bash
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -e DOCKER_USERNAME="your-username" \
-  -e DOCKER_PAT="your-pat" \
   dhi-eol-detector <image-name>
 ```
 
@@ -35,16 +30,27 @@ docker run --rm \
 # Check if an image uses a DHI base and get its EOL dates
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -e DOCKER_USERNAME="$DOCKER_USERNAME" \
-  -e DOCKER_PAT="$DOCKER_PAT" \
   dhi-eol-detector demonstrationorg/task-api
 ```
 ### Sample Output
 
-![Sample output of DHI EOL Detector](assets/sample-output.png)
+```
+🔍 DHI EOL Detector — analysing 'demonstrationorg/task-api'
+
+Step 1: Inspecting image labels
+  ✔ This image is based on a Docker Hardened Image! ✅
+  ℹ com.docker.dhi.url: https://dhi.io/catalog/node
+  ℹ com.docker.dhi.version: 24.13.1-alpine3.22
+  ℹ DHI Repository: node
+  ℹ DHI Version: 24.13.1-alpine3.22
+
+Step 2: Checking End of Life status
+  ℹ com.docker.dhi.date.end-of-life: 2028-04-30
+  2 years, 2 months, 7 days remaining
+```
 
 ## How It Works
 
 1. **Inspect image labels** — pulls the image if not available locally, then reads labels via `docker inspect`
-2. **Check for DHI labels** — looks for `com.docker.dhi.url` and `com.docker.dhi.version`. If present, the image is a based of a Docker Hardened Image. If not, it stops and reports it is not based of a DHI.
-3. **Fetch EOL dates** — authenticates with Docker Hub (PAT → JWT) and queries the `dhiRepository` GraphQL API for the `endOfLife` date matching the image version
+2. **Check for DHI labels** — looks for `com.docker.dhi.url` and `com.docker.dhi.version`. If present, the image is based on a Docker Hardened Image. If not, it stops and reports it is not a DHI.
+3. **Check EOL status** — reads the `com.docker.dhi.date.end-of-life` label and reports whether the image is past EOL or how much time remains
